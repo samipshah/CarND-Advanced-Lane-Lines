@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import glob
 import os
 import math
+from collections import deque
 
 # with every image we detect a left and a right line
 class Line():
@@ -18,9 +19,9 @@ class Line():
         # curvature
         self.curvature = None
         # meters per pexel in y dimension
-        self.ym_per_pix = 3./200
+        self.ym_per_pix = 30./720
         # meters per pixel in x dimension
-        self.xm_per_pix = 3.7/900
+        self.xm_per_pix = 3.7/500
         # slope
         self.slope = None
 
@@ -60,23 +61,35 @@ class Line():
 class LineAggregate():
     def __init__(self, N):
         self.N = N
-        self.aggregate = []
+        self.aggregate = deque(maxlen=N)
+        self._best_line_count = 0
 
     def add_line(self, line):
-        if len(self.aggregate) == self.N:
-            self.aggregate[1:].append(line)
+        self.aggregate.append(line)
 
-    def best_line(self, ysize):
+        # if len(self.aggregate) == self.N:
+        #     print(line)
+        #     self.aggregate[1:].append(line)
+        #     print(self.aggregate)
+        # else:
+        #     self.aggregate.append(line)
+
+    def best_line(self, ysize=720, debug=False):
+        self._best_line_count += 1
         # average last N allx
         if len(self.aggregate) == 0:
+            if debug is True:
+                print("aggregate zero")
             return None
 
         recent_xfitted = np.array([x.allx for x in self.aggregate])
         avg_allx = np.mean(recent_xfitted, axis=0)
         ally = np.linspace(0, ysize-1, ysize)
-
         line = Line()
         line.update_xy(avg_allx, ally)
+        if debug is True:
+            print("returned best_line: ", self._best_line_count)
+        # print(line.fit[0])
         return line
 
 class Lane():
@@ -86,9 +99,9 @@ class Lane():
         # left line
         self.left = Line()
         # right line aggregate
-        self.right_agg = LineAggregate(10)
+        self.right_agg = LineAggregate(5)
         # left line aggregate
-        self.left_agg = LineAggregate(10)
+        self.left_agg = LineAggregate(5)
         # detected
         self.detected = False
         # sanity check failure accepted
@@ -96,36 +109,44 @@ class Lane():
 
     def _sanity_check(self, left, right):
         # compare with existing curvature
-        if self.left.curvature is not None:
-            percent = abs(self.left.curvature - left.curvature)/self.left.curvature
-            if percent > 0.5:
-                print("Left curvature diff: ", percent)
-                return False
+        # if self.left.curvature is not None:
+        #     percent = abs(self.left.curvature - left.curvature)/self.left.curvature
+        #     if percent > 2:
+        #         print("Left curvature diff: ", percent)
+        #         return False
 
-        # compare with existing right curvature
-        if self.right.curvature is not None:
-            percent = abs(self.right.curvature - right.curvature)/self.right.curvature
-            if percent > 0.5:
-                print("Right curvature diff: ", percent)
-                return False
+        # # compare with existing right curvature
+        # if self.right.curvature is not None:
+        #     percent = abs(self.right.curvature - right.curvature)/self.right.curvature
+        #     if percent > 2:
+        #         print("Right curvature diff: ", percent)
+        #         return False
 
-        curvature_diff = abs(left.curvature - right.curvature)
-        # check curvature is more or less similar of both lanes
-        if curvature_diff > 20:
-            print("Distance: ", curvature_diff, " left:", left.curvature, " right:", right.curvature)
-            return False
+        # curvature_diff = abs(left.curvature - right.curvature)
+        # # check curvature is more or less similar of both lanes
+        # if (curvature_diff/np.min([left.curvature, right.curvature])) > 2:
+        #     print("Distance: ", curvature_diff, " left:", left.curvature, " right:", right.curvature)
+        #     return False
 
         # compare with lane width
         lanewidth = abs(left.basex() - right.basex())*self.right.xm_per_pix
         # 25% error in m width accepted
-        if lanewidth > 3.7*1.25 or lanewidth < 3.7*.75:
+        if lanewidth > 5 or lanewidth < 2.5:
+            print("Lanewidth: ", lanewidth)
             return False
 
         # roughly parallel
         div = abs(left.slope/right.slope)
-        if div > 1.5 or div < .5:
+        if div > 2 or div < .5:
             print("Div: ", div, " left-slope:", left.slope, " right-slope:", right.slope)
             return False
+
+        # if offset from center is way out reject the frame
+        offset = self.get_offset(1280, left=left, right=right)
+        if offset > 1.5:
+            print("Offset: ", offset)
+            return False
+
         return True
 
     def line_detected_current_frame(self, left, right):
@@ -141,24 +162,28 @@ class Lane():
             if self.failure_count > 5:
                 self.detected = False
 
-        yeval = np.max(self.left.ally)
-        best_left_line = self.left_agg.best_line(yeval)
-        if best_left_line is None:
+        self.left = self.left_agg.best_line()
+        if self.left is None:
             self.left = left
-        yeval = np.max(self.right.ally)
-        best_right_line = self.right_agg.best_line(yeval)
-        if best_right_line is None:
+        self.right = self.right_agg.best_line()
+        if self.right is None:
             self.right = right
         return self.left, self.right
 
     def get_curvature(self):
         return np.mean([self.right.curvature + self.left.curvature])
 
-    def get_offset(self, xshape, debug=False):
+    def get_offset(self, xshape, left=None, right=None, debug=False):
+        if left is None:
+            left = self.left
+
+        if right is None:
+            right = self.right
+
         if debug is True:
-            print("mean: ", np.mean([self.right.basex(), self.left.basex()]))
+            print("mean: ", np.mean([right.basex(), left.basex()]))
             print("midpoint: ", xshape/2)
-        return abs((xshape/2) - np.mean([self.right.basex(), self.left.basex()]))*self.right.xm_per_pix
+        return abs((xshape/2) - np.mean([right.basex(), left.basex()]))*right.xm_per_pix
 
     def get_lanewidth(self, debug=False):
         if debug is True:
@@ -188,28 +213,16 @@ class LaneDetectPipeline():
 
 
     def _get_perspective_transform_matrix(self):
-        # src = np.float32([
-        #     [205, 720],
-        #     [1075, 720],
-        #     [590, 450],
-        #     [690, 450]
-        # ])
-        # dst = np.float32([
-        #     [205, 720],
-        #     [1075, 720],
-        #     [205, 0],
-        #     [1075, 0]
-        # ])
         src = np.float32(
             [[200, 720],
             [1100, 720],
             [595, 450],
             [685, 450]])
         dst = np.float32(
-            [[300, 720],
-            [980, 720],
-            [300, 0],
-            [980, 0]])
+            [[400, 720],
+            [900, 720],
+            [400, 0],
+            [900, 0]])
         M = cv2.getPerspectiveTransform(src, dst)
         Minv = cv2.getPerspectiveTransform(dst, src)
         return M, Minv
@@ -504,8 +517,8 @@ class LaneDetectPipeline():
                 win_xright_low = rightx_current - margin
                 win_xright_high = rightx_current + margin
                 # Draw the windows on the visualization image
-                cv2.rectangle(out_img,(win_xleft_low,win_y_low),(win_xleft_high,win_y_high),(0,255,0), 2) 
-                cv2.rectangle(out_img,(win_xright_low,win_y_low),(win_xright_high,win_y_high),(0,255,0), 2) 
+                cv2.rectangle(out_img, (win_xleft_low, win_y_low), (win_xleft_high, win_y_high), (0, 255, 0), 2) 
+                cv2.rectangle(out_img, (win_xright_low, win_y_low), (win_xright_high, win_y_high), (0, 255, 0), 2) 
                 # Identify the nonzero pixels in x and y within the window
                 good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (nonzerox < win_xleft_high)).nonzero()[0]
                 good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (nonzerox < win_xright_high)).nonzero()[0]
@@ -524,15 +537,15 @@ class LaneDetectPipeline():
 
             # Extract left and right line pixel positions
             leftx = nonzerox[left_lane_inds]
-            lefty = nonzeroy[left_lane_inds] 
+            lefty = nonzeroy[left_lane_inds]
             rightx = nonzerox[right_lane_inds]
-            righty = nonzeroy[right_lane_inds] 
+            righty = nonzeroy[right_lane_inds]
 
             # Fit a second order polynomial to each
             left_fit = np.polyfit(lefty, leftx, 2)
             right_fit = np.polyfit(righty, rightx, 2)
 
-            ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0] )
+            ploty = np.linspace(0, binary_warped.shape[0]-1, binary_warped.shape[0])
             left_fitx = left_fit[0]*ploty**2 + left_fit[1]*ploty + left_fit[2]
             right_fitx = right_fit[0]*ploty**2 + right_fit[1]*ploty + right_fit[2]
             left = Line()
@@ -551,10 +564,10 @@ class LaneDetectPipeline():
     def find_lines(self, img, debug=False):
         return self._finding_lines(img)
 
-    def write_on_image(self, img, text, location=(719,500)):
+    def write_on_image(self, img, text, location=(719, 500)):
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(img, text, location, font, 1, (255,255,255), 2, cv2.LINE_AA)
-        
+        cv2.putText(img, text, location, font, 1, (255, 255, 255), 2, cv2.LINE_AA)
+
     def run(self, img, debug=False):
         und_img = self.undistort(img)
         if debug is True:
@@ -585,8 +598,8 @@ class LaneDetectPipeline():
             pts_left = np.array([np.transpose(np.vstack([left.allx, left.ally]))])
             pts_right = np.array([np.flipud(np.transpose(np.vstack([right.allx, right.ally])))])
             # pts = np.hstack((pts_left, pts_right)
-            pts_left = pts_left.reshape((-1,1,2))
-            pts_right = pts_right.reshape((-1,1,2))
+            pts_left = pts_left.reshape((-1, 1, 2))
+            pts_right = pts_right.reshape((-1, 1, 2))
             cv2.polylines(tempcolor_warp, np.int_([pts_left]), False, (0, 0, 255), thickness=5)
             cv2.polylines(tempcolor_warp, np.int_([pts_right]), False, (255, 0, 0), thickness=5)
             plt.imshow(tempcolor_warp)
@@ -619,6 +632,7 @@ if __name__ == "__main__":
     files = glob.glob("../test_images/*.jpg")
     calibration_files = glob.glob("../camera_cal/calibration*.jpg")
     pipeline = LaneDetectPipeline(calibration_files)
+    files = ["../output/IMG/570.jpg"]
 
     for filename in files:
         testimg = mpimg.imread(filename)
