@@ -3,6 +3,7 @@ import cv2
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
 import glob
+import os
 import math
 
 # with every image we detect a left and a right line
@@ -108,18 +109,22 @@ class Lane():
                 print("Right curvature diff: ", percent)
                 return False
 
-        # compare with lane width
-        distance = abs(left.curvature - right.curvature)
-        # check line separation is proper
-        if (distance < 2.5) or (distance > 10):
-            print("Distance: ", distance, " left:", left.curvature, " right:", right.curvature)
+        curvature_diff = abs(left.curvature - right.curvature)
+        # check curvature is more or less similar of both lanes
+        if curvature_diff > 20:
+            print("Distance: ", curvature_diff, " left:", left.curvature, " right:", right.curvature)
             return False
 
-        # root mean square value for error
-        mse = ((left.slope - right.slope) ** 2).mean()
-        rms = math.sqrt(mse)
-        if rms > 10:
-            print("RMS: ", rms)
+        # compare with lane width
+        lanewidth = abs(left.basex() - right.basex())*self.right.xm_per_pix
+        # 25% error in m width accepted
+        if lanewidth > 3.7*1.25 or lanewidth < 3.7*.75:
+            return False
+
+        # roughly parallel
+        div = abs(left.slope/right.slope)
+        if div > 1.5 or div < .5:
+            print("Div: ", div, " left-slope:", left.slope, " right-slope:", right.slope)
             return False
         return True
 
@@ -129,8 +134,6 @@ class Lane():
             # set them as right and left and add it to aggregate
             self.right_agg.add_line(right)
             self.left_agg.add_line(left)
-            # self.left = left
-            # self.right = right
             self.detected = True
             self.failure_count = 0
         else:
@@ -163,54 +166,6 @@ class Lane():
             print("left basex:", self.left.basex())
         return abs(self.right.basex() - self.left.basex())*self.right.xm_per_pix
 
-# class Line():
-#     def __init__(self):
-#         self.N = 5 
-#         # was the line detected in the last iteration?
-#         self.detected = False  
-#         # x values of the last n fits of the line
-#         self.recent_xfitted = [] 
-#         #average x values of the fitted line over the last n iterations
-#         self.bestx = None     
-#         #polynomial coefficients averaged over the last n iterations
-#         self.best_fit = None  
-#         #polynomial coefficients for the most recent fit
-#         self.current_fit = [np.array([False])]  
-#         #polynomial coefficients for the most recent N
-#         self.recent_fits = []
-#         #radius of curvature of the line in some units
-#         self.radius_of_curvature = None 
-#         #distance in meters of vehicle center from the line
-#         self.line_base_pos = None 
-#         #difference in fit coefficients between last and new fits
-#         self.diffs = np.array([0,0,0], dtype='float') 
-#         #x values for detected line pixels
-#         self.allx = None  
-#         #y values for detected line pixels
-#         self.ally = None
-
-#     def update(self, ploty, current_fit, fitx, detected):
-#         self.detected = detected
-#         self.ally = ploty
-#         self.allx = fitx
-#         self.diffs = np.subtract(current_fit, self.current_fit)
-#         self.current_fit = current_fit
-#         if len(self.recent_xfitted) == self.N:
-#             self.recent_xfitted[1:].append(fitx)
-#         if len(self.recent_xfitted) > 1:
-#             self.bestx = np.average(self.recent_xfitted, axis=0)
-#         if len(self.recent_fits) == self.N:
-#             self.recent_fits[1:].append(current_fit)
-#         if len(self.recent_fits) > 1:
-#             self.best_fit = np.average(self.recent_fits, axis=0)
-
-#     def update_curve(self, radius_of_curvature):
-#         self.radius_of_curvature = radius_of_curvature
-
-#     def update_line_base_pos(self, x_pos, base_pos=640):
-#         self.line_base_pos = x_pos - base_pos
-
-
 class LaneDetectPipeline():
     def __init__(self, calibration_files=None):
         # right, left line
@@ -221,32 +176,40 @@ class LaneDetectPipeline():
         self.dist = None
         # perspective transform
         self.warp_mat, self.unwarp_mat = self._get_perspective_transform_matrix()
-        if calibration_files != None:
-            self.mat, self.dist = self._get_camera_distortion_matrix(calibration_files)
+        camera_file = "cam.npz"
+        if os.path.exists(camera_file):
+            npload = np.load(camera_file)
+            self.mat = npload['mat']
+            self.dist = npload['dist']
+        else:
+            if calibration_files != None:
+                self.mat, self.dist = self._get_camera_distortion_matrix(calibration_files)
+                np.savez(camera_file, mat=self.mat, dist=self.dist)
 
-    # def update_curves(self, left_curve, right_curve):
-    #     self.curve_diff = abs(right_curve - left_curve)
-    #     numerator = self.total_curve_values
-    #     self.total_curve_values += 1
-    #     denom = self.total_curve_values
-    #     self.mean_curve = self.mean_curve*(numerator/denom) + self.curve_diff*(1/denom)
 
-    # def update_offset(self):
-    #     self.cam_offset = abs(self.right.line_base_pos) - abs(self.left.line_base_pos)
-    #     print(self.cam_offset)
     def _get_perspective_transform_matrix(self):
-        src = np.float32([
-            [205, 720],
-            [1075, 720],
-            [590, 450],
-            [690, 450]
-        ])
-        dst = np.float32([
-            [205, 720],
-            [1075, 720],
-            [205, 0],
-            [1075, 0]
-        ])
+        # src = np.float32([
+        #     [205, 720],
+        #     [1075, 720],
+        #     [590, 450],
+        #     [690, 450]
+        # ])
+        # dst = np.float32([
+        #     [205, 720],
+        #     [1075, 720],
+        #     [205, 0],
+        #     [1075, 0]
+        # ])
+        src = np.float32(
+            [[200, 720],
+            [1100, 720],
+            [595, 450],
+            [685, 450]])
+        dst = np.float32(
+            [[300, 720],
+            [980, 720],
+            [300, 0],
+            [980, 0]])
         M = cv2.getPerspectiveTransform(src, dst)
         Minv = cv2.getPerspectiveTransform(dst, src)
         return M, Minv
@@ -278,7 +241,7 @@ class LaneDetectPipeline():
         ret, mat, dist, rvects, tvecs = cv2.calibrateCamera(objpoints, imgpoints, imgsize, None, None)
         return mat, dist
 
-    def undistort(self, img):
+    def undistort(self, img, debug=False):
         if self.mat is None:
             raise "camera matrix cant be none"
 
@@ -287,6 +250,14 @@ class LaneDetectPipeline():
 
         return cv2.undistort(img, self.mat, self.dist, None, self.mat)
 
+    def sat_threshold(self, img, thresh=(0, 255)):
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
+        s_channel = img[:, :, 2]
+        s_binary = np.zeros_like(s_channel)
+        mask = [(s_channel > thresh[0]) & (s_channel < thresh[1])]
+        s_binary[mask] = 1
+        return s_binary
+
     def hue_threshold(self, img, thresh=(0,255)):
         img = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
         h_channel = img[:, :, 0]
@@ -294,20 +265,43 @@ class LaneDetectPipeline():
         mask = [(h_channel > thresh[0]) & (h_channel < thresh[1])]
         hue_binary[mask] = 1
         return hue_binary
-    
-    def lightness_threshold(self, img, thresh=(0,255)):
+
+    def lightness_threshold(self, img, thresh=(0, 255)):
         ing = cv2.cvtColor(img, cv2.COLOR_RGB2HLS)
-        l_channel = img[:,:,1]
+        l_channel = img[:, :, 1]
         l_binary = np.zeros_like(l_channel)
         mask = [(l_channel > thresh[0]) & (l_channel < thresh[1])]
         l_binary[mask] = 1
         return l_binary
 
-    def yellow_thresh(self, img):
-        return self.hue_threshold(img, thresh=(18, 25))
+    def yellow_thresh(self, img, debug=False):
+        huedetect = self.hue_threshold(img, thresh=(18, 25))
+        satdetect = self.sat_threshold(img, thresh=(100, 255))
+        yellowdetect = huedetect & satdetect
+        if debug is True:
+            plt.imshow(yellowdetect, cmap='gray')
+            plt.title('Yellow Detect')
+            plt.show()
+        return yellowdetect
 
-    def white_thresh(self, img):
-        return self.lightness_threshold(img, thresh=(195, 255))
+    def value_threshold(self, img, thresh=(0,255)):
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        h_channel = hsv[:, :, 0]
+        s_channel = hsv[:, :, 1]
+        v_channel = hsv[:, :, 2]
+        v_binary = np.zeros_like(v_channel)
+        mask = [(v_channel > thresh[0]) & (v_channel < thresh[1]) & (h_channel == 0) & (s_channel == 0)]
+        v_binary[mask] = 1
+        return v_binary
+
+    def white_thresh(self, img, debug=False):
+        # whitedetect = self.value_threshold(img, thresh=(70,255))
+        whitedetect = self.lightness_threshold(img, thresh=(195, 255))
+        if debug is True:
+            plt.imshow(whitedetect, cmap='gray')
+            plt.title('White Detect')
+            plt.show()
+        return whitedetect
 
     def red_channel_thresh(self, img, sobel_kernel=3, thresh=(0, 255)):
         r_channel = img[:, :, 0]
@@ -351,7 +345,7 @@ class LaneDetectPipeline():
         mag_binary = np.zeros_like(scaled_mag)
         mask = ((scaled_mag > thresh[0]) & (scaled_mag < thresh[1]))
         mag_binary[mask] = 1
-        return mag_binary
+        return mag_binary.astype(np.uint8)
 
     def dir_threshold(self, img, sobel_kernel=3, thresh=(0, np.pi/2)):
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -364,22 +358,54 @@ class LaneDetectPipeline():
         mask = [(direction > thresh[0]) & (direction < thresh[1])]
         dir_binary = np.zeros_like(direction)
         dir_binary[mask] = 1
-        return dir_binary
+        return dir_binary.astype(np.uint8)
 
-    def transform_img(self, und_img):
+    def transform_img(self, und_img, debug=False):
         yellow = self.yellow_thresh(und_img)
+        if debug is True:
+            plt.imshow(yellow, cmap='gray')
+            plt.title('yellow lane')
+            plt.show()
+
         white = self.white_thresh(und_img)
-        combined_colors = np.zeros_like(yellow)
-        combined_colors[(yellow == 1) | (white == 1)] = 1
-        dirt = self.dir_threshold(und_img, sobel_kernel=13, thresh=(.7, 1.3))
-        magt = self.mag_thresh(und_img, sobel_kernel=9, thresh=(30, 100))
-        both_dir_mag = np.zeros_like(dirt)
-        both_dir_mag[(dirt == 1) & (magt == 1)] = 1
-        result = np.zeros_like(dirt)
-        result[(combined_colors == 1) | (both_dir_mag == 1)] = 1
+        if debug is True:
+            plt.imshow(white, cmap='gray')
+            plt.title('white lane')
+            plt.show()
+        
+        combined_colors = white | yellow
+        if debug is True:
+            plt.imshow(combined_colors, cmap='gray')
+            plt.title('yellow and white lanes')
+            plt.show()
+
+        dirt = self.dir_threshold(und_img, sobel_kernel=15, thresh=(.7, 1.3))
+        if debug is True:
+            plt.imshow(dirt, cmap='gray')
+            plt.title('direction')
+            plt.show()
+
+        magt = self.mag_thresh(und_img, sobel_kernel=3, thresh=(50, 255))
+        if debug is True:
+            plt.imshow(magt, cmap='gray')
+            plt.title('magnitude')
+            plt.show()
+
+        both_dir_mag = dirt & magt
+        if debug is True:
+            plt.imshow(both_dir_mag, cmap='gray')
+            plt.title('both direction and magnitude')
+            plt.show()
+
+        result = combined_colors | both_dir_mag
+        # result = combined_colors & dirt
+        if debug is True:
+            plt.imshow(result, cmap='gray')
+            plt.title('result')
+            plt.show()
         return result
         
-    def draw(self, img, left, right):
+    def draw(self, img, left, right, debug=False):
         warp_zero = np.zeros_like(img).astype(np.uint8)
         color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
 
@@ -394,25 +420,12 @@ class LaneDetectPipeline():
         # Warp the blank back to original image space using inverse perspective matrix (Minv)
         newwarp = cv2.warpPerspective(color_warp, self.unwarp_mat, img.shape[0:2][::-1])
         return newwarp
-
-    # def draw(self, img, ploty, left_fitx, right_fitx):
-    #     warp_zero = np.zeros_like(img).astype(np.uint8)
-    #     color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
-
-    #     # Recast the x and y points into usable format for cv2.fillPoly()
-    #     pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
-    #     pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
-    #     pts = np.hstack((pts_left, pts_right))
-
-    #     # Draw the lane onto the warped blank image
-    #     cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
-
-    #     # Warp the blank back to original image space using inverse perspective matrix (Minv)
-    #     newwarp = cv2.warpPerspective(color_warp, self.unwarp_mat, img.shape[0:2][::-1])
-    #     return newwarp
     
-    def warp_img(self, img):
-        return cv2.warpPerspective(img, self.warp_mat, img.shape[0:2][::-1],flags=cv2.INTER_LINEAR)
+    def warp_img(self, img, debug=False):
+        warped_img = cv2.warpPerspective(img, self.warp_mat, img.shape[0:2][::-1],flags=cv2.INTER_LINEAR)
+        binarywarped_img = np.copy(warped_img)
+        binarywarped_img[warped_img.nonzero()] = 1
+        return binarywarped_img
 
     def unwarp_img(self, img):
         return cv2.warpPerspective(img, self.unwarp_mat, img.shape[0:2][::-1])
@@ -535,189 +548,8 @@ class LaneDetectPipeline():
 
         return left, right
 
-    # def _sliding_window_search():
-    #     window_width = 50 
-    #     window_height = 80 # Break image into 9 vertical layers since image height is 720
-    #     margin = 100 # How much to slide left and right for searching
-
-    #     def window_mask(width, height, img_ref, center,level):
-    #         output = np.zeros_like(img_ref)
-    #         output[int(img_ref.shape[0]-(level+1)*height):int(img_ref.shape[0]-level*height),max(0,int(center-width/2)):min(int(center+width/2),img_ref.shape[1])] = 1
-    #         return output
-
-    #     def find_window_centroids(image, window_width, window_height, margin):
-            
-    #         window_centroids = [] # Store the (left,right) window centroid positions per level
-    #         window = np.ones(window_width) # Create our window template that we will use for convolutions
-            
-    #         # First find the two starting positions for the left and right lane by using np.sum to get the vertical image slice
-    #         # and then np.convolve the vertical image slice with the window template 
-            
-    #         # Sum quarter bottom of image to get slice, could use a different ratio
-    #         l_sum = np.sum(warped[int(3*warped.shape[0]/4):,:int(warped.shape[1]/2)], axis=0)
-    #         l_center = np.argmax(np.convolve(window,l_sum))-window_width/2
-    #         r_sum = np.sum(warped[int(3*warped.shape[0]/4):,int(warped.shape[1]/2):], axis=0)
-    #         r_center = np.argmax(np.convolve(window,r_sum))-window_width/2+int(warped.shape[1]/2)
-            
-    #         # Add what we found for the first layer
-    #         window_centroids.append((l_center,r_center))
-            
-    #         # Go through each layer looking for max pixel locations
-    #         for level in range(1,(int)(warped.shape[0]/window_height)):
-    #             # convolve the window into the vertical slice of the image
-    #             image_layer = np.sum(warped[int(warped.shape[0]-(level+1)*window_height):int(warped.shape[0]-level*window_height),:], axis=0)
-    #             conv_signal = np.convolve(window, image_layer)
-    #             # Find the best left centroid by using past left center as a reference
-    #             # Use window_width/2 as offset because convolution signal reference is at right side of window, not center of window
-    #             offset = window_width/2
-    #             l_min_index = int(max(l_center+offset-margin,0))
-    #             l_max_index = int(min(l_center+offset+margin,warped.shape[1]))
-    #             l_center = np.argmax(conv_signal[l_min_index:l_max_index])+l_min_index-offset
-    #             # Find the best right centroid by using past right center as a reference
-    #             r_min_index = int(max(r_center+offset-margin,0))
-    #             r_max_index = int(min(r_center+offset+margin,warped.shape[1]))
-    #             r_center = np.argmax(conv_signal[r_min_index:r_max_index])+r_min_index-offset
-    #             # Add what we found for that layer
-    #             window_centroids.append((l_center,r_center))
-
-    #         return window_centroids
-
-    #     window_centroids = find_window_centroids(warped, window_width, window_height, margin)
-
-    #     # If we found any window centers
-    #     if len(window_centroids) > 0:
-
-    #         # Points used to draw all the left and right windows
-    #         l_points = np.zeros_like(warped)
-    #         r_points = np.zeros_like(warped)
-
-    #         # Go through each level and draw the windows 	
-    #         for level in range(0,len(window_centroids)):
-    #             # Window_mask is a function to draw window areas
-    #             l_mask = window_mask(window_width,window_height,warped,window_centroids[level][0],level)
-    #             r_mask = window_mask(window_width,window_height,warped,window_centroids[level][1],level)
-    #             # Add graphic points from window mask here to total pixels found 
-    #             l_points[(l_points == 255) | ((l_mask == 1) ) ] = 255
-    #             r_points[(r_points == 255) | ((r_mask == 1) ) ] = 255
-
-    #         # Draw the results
-    #         template = np.array(r_points+l_points,np.uint8) # add both left and right window pixels together
-    #         zero_channel = np.zeros_like(template) # create a zero color channel
-    #         template = np.array(cv2.merge((zero_channel,template,zero_channel)),np.uint8) # make window pixels green
-    #         warpage = np.array(cv2.merge((warped,warped,warped)),np.uint8) # making the original road pixels 3 color channels
-    #         output = cv2.addWeighted(warpage, 1, template, 0.5, 0.0) # overlay the orignal road image with window results
-        
-    #     # If no window centers found, just display orginal road image
-    #     else:
-    #         output = np.array(cv2.merge((warped,warped,warped)),np.uint8)
-
-    # def _points_based_on_best_fit(self, ploty):
-    #     leftx = self.left.best_fit[0]*(ploty**2) + self.left.best_fit[1]*ploty + self.left.best_fit[2]
-    #     rightx = self.right.best_fit[0]*(ploty**2) + self.right.best_fit[1]*ploty + self.right.best_fit[2]
-    #     return ploty, self.left.best_fit, leftx, self.right.best_fit, rightx
-
     def find_lines(self, img, debug=False):
-        left, right = self._finding_lines(img)
-        # do sanity check
-        if debug is True:
-            plt.imshow(img, cmap='gray')
-            plt.title('lane points')
-            plt.show()
-        # detected = True
-        # if not self._sanity_check(ploty, left_fit, left_fitx, right_fit, right_fitx):
-        #     if self.left.best_fit is not None and self.right.best_fit is not None:
-        #         ploty, left_fix, left_fitx, right_fit, right_fitx = self._points_based_on_best_fit(ploty)
-        #         detected = False
-        
-        # # update information about lane points
-        # self.left.update(ploty, left_fit, left_fitx, detected)
-        # self.right.update(ploty, right_fit, right_fitx, detected)
-        # self.left.update_line_base_pos(left_fitx[img.shape[0]-1])
-        # self.right.update_line_base_pos(right_fitx[img.shape[0]-1])
-        return left, right
-
-    # def lane_points(self, img, debug=False):
-    #     ploty, left_fit, left_fitx, right_fit, right_fitx = self._finding_lines(img)
-    #     # do sanity check
-    #     if debug is True:
-    #         plt.imshow(img, cmap='gray')
-    #         plt.title('lane points')
-    #         plt.show()
-    #     detected = True
-    #     if not self._sanity_check(ploty, left_fit, left_fitx, right_fit, right_fitx):
-    #         if self.left.best_fit is not None and self.right.best_fit is not None:
-    #             ploty, left_fix, left_fitx, right_fit, right_fitx = self._points_based_on_best_fit(ploty)
-    #             detected = False
-        
-    #     # update information about lane points
-    #     self.left.update(ploty, left_fit, left_fitx, detected)
-    #     self.right.update(ploty, right_fit, right_fitx, detected)
-    #     self.left.update_line_base_pos(left_fitx[img.shape[0]-1])
-    #     self.right.update_line_base_pos(right_fitx[img.shape[0]-1])
-    #     return ploty, left_fitx, right_fitx
-
-    # def _find_curve(self, ploty, leftx, rightx):
-    #     y_eval = np.max(ploty)
-    #     print(y_eval)
-    #     # left_curverad = ((1 + (2*self.left.current_fit[0]*y_eval + self.left.current_fit[1])**2)**1.5) / np.absolute(2*self.left.current_fit[0])
-    #     # right_curverad = ((1 + (2*self.right.current_fit[0]*y_eval + self.right.current_fit[1])**2)**1.5) / np.absolute(2*self.right.current_fit[0])
-    #     # print(left_curverad, right_curverad)
-    #     # Define conversions in x and y from pixels space to meters
-    #     ym_per_pix = 3./200 # meters per pixel in y dimension
-    #     xm_per_pix = 3.7/900# meters per pixel in x dimension
-
-    #     # Fit new polynomials to x,y in world space
-    #     left_fit_cr = np.polyfit(ploty*ym_per_pix, leftx*xm_per_pix, 2)
-    #     right_fit_cr = np.polyfit(ploty*ym_per_pix, rightx*xm_per_pix, 2)
-    #     # Calculate the new radii of curvature
-    #     left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
-    #     right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
-    #     # Now our radius of curvature is in meters
-    #     return left_curverad, right_curverad  
-
-    # def _find_slope(self, ploty, left_fit, right_fit):
-    #     # 2Ay + b
-    #     midpoint = int(ploty.shape[0]/2)
-    #     y_eval = ploty[midpoint]
-    #     left_slope = (2*left_fit[0]*y_eval) + left_fit[1]
-    #     right_slope = (2*right_fit[0]*y_eval) + right_fit[1]
-    #     return left_slope, right_slope
-
-    # def _sanity_check(self, ploty, left_fit, left_fitx, right_fit, right_fitx):
-    #     left_curve, right_curve = self._find_curve(ploty, left_fitx, right_fitx)
-
-    #     # compare with existing curvature
-    #     if self.left.radius_of_curvature is not None:
-    #         left_diff = abs(self.left.radius_of_curvature - left_curve)
-    #         if left_diff > self.left.radius_of_curvature*.2:
-    #             print("Left curvature diff: ", left_diff)
-    #             return False
-
-    #     # compare with existing right curvature
-    #     if self.right.radius_of_curvature is not None:
-    #         right_diff = abs(self.right.radius_of_curvature - right_curve)
-    #         if right_diff > self.right.radius_of_curvature*.2:
-    #             print("Right curvature diff: ", right_diff)
-    #             return False
-
-    #     # compare with lane width
-    #     distance = abs(left_curve - right_curve)
-    #     # check line separation is proper
-    #     if (distance < 2.5) or (distance > 10): 
-    #         print("Distance: ", distance, " left:", left_curve, " right:", right_curve)
-    #         return False
-
-
-    #     left_slope, right_slope = self._find_slope(ploty, left_fit, right_fit)
-    #     mse = ((left_slope - right_slope) ** 2).mean()
-    #     rms = math.sqrt(mse)
-    #     if rms > 10:
-    #         print("RMS: ", rms)
-    #         return False
-        
-    #     self.left.update_curve(left_curve)
-    #     self.right.update_curve(right_curve)
-    #     return True
+        return self._finding_lines(img)
 
     def write_on_image(self, img, text, location=(719,500)):
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -730,13 +562,13 @@ class LaneDetectPipeline():
             plt.title('undistorted image')
             plt.show()
 
-        res_img = self.transform_img(und_img)
+        res_img = self.transform_img(und_img, debug)
         if debug is True:
             plt.imshow(res_img, cmap='gray')
             plt.title('transformed image')
             plt.show()
 
-        warped_img = self.warp_img(res_img)
+        warped_img = self.warp_img(res_img, debug)
         if debug is True:
             plt.imshow(warped_img, cmap='gray')
             plt.title('warped image')
@@ -744,24 +576,29 @@ class LaneDetectPipeline():
             print(warped_img.shape)
 
         # detect line within the img
-        left, right = self.find_lines(warped_img)
+        left, right = self.find_lines(warped_img, debug)
+        if debug is True:
+            #draw line on top of warped_img
+            temp_warpimg = np.copy(warped_img)
+            tempcolor_warp = (np.dstack((temp_warpimg, temp_warpimg, temp_warpimg))*255).astype(np.uint8)
 
-        print(self.lane)
+            pts_left = np.array([np.transpose(np.vstack([left.allx, left.ally]))])
+            pts_right = np.array([np.flipud(np.transpose(np.vstack([right.allx, right.ally])))])
+            # pts = np.hstack((pts_left, pts_right)
+            pts_left = pts_left.reshape((-1,1,2))
+            pts_right = pts_right.reshape((-1,1,2))
+            cv2.polylines(tempcolor_warp, np.int_([pts_left]), False, (0, 0, 255), thickness=5)
+            cv2.polylines(tempcolor_warp, np.int_([pts_right]), False, (255, 0, 0), thickness=5)
+            plt.imshow(tempcolor_warp)
+            plt.title('detected lines')
+            plt.show()
+
         left, right = self.lane.line_detected_current_frame(left, right)
-        # ypts, left_fitx, right_fitx = self.lane_points(warped_img)
-        # lane_detected = self.draw(warped_img, ypts, left_fitx, right_fitx)
-        lane_detected = self.draw(warped_img, left, right)
+        lane_detected = self.draw(warped_img, left, right, debug)
         if debug is True:
             plt.imshow(lane_detected)
             plt.title('lane detected')
             plt.show()
-
-        # # find curvature
-        # left_curve, right_curve = self.(ypts, left_fitx, right_fitx)
-        # if debug is True:
-        #     print(left_curve, 'm', right_curve, 'm')
-
-        # self.sanity_check()
 
         # Combine the result with the original image
         result = cv2.addWeighted(img, 1, lane_detected, 0.3, 0)
@@ -779,104 +616,17 @@ class LaneDetectPipeline():
 
 
 if __name__ == "__main__":
-    testimg = mpimg.imread("../test_images/test1.jpg")
+    files = glob.glob("../test_images/*.jpg")
     calibration_files = glob.glob("../camera_cal/calibration*.jpg")
     pipeline = LaneDetectPipeline(calibration_files)
-    plt.imshow(testimg)
-    plt.title('Original')
-    plt.show()
 
-    result = pipeline.run(testimg, debug=True)
-    plt.imshow(result)
-    plt.title('Result')
-    plt.show()
-    # undistort = pipeline.undistort(testimg)
-    # plt.imshow(undistort)
-    # plt.title('Undistort')
-    # plt.show()
+    for filename in files:
+        testimg = mpimg.imread(filename)
+        plt.imshow(testimg)
+        plt.title('Original ' + filename)
+        plt.show()
 
-    # tranx = pipeline.transform_img(undistort)
-    # plt.imshow(tranx, cmap='gray')
-    # plt.title('Transformed')
-    # plt.show()
-    
-    # warped = pipeline.warp_img(tranx)
-    # plt.imshow(warped, cmap='gray')
-    # plt.title('Warped')
-    # plt.show()
-
-    # unwarped = pipeline.unwarp_img(warped)
-    # combined = cv2.addWeighted(testimg, 1, unwarped, 0.3, 0)
-    # plt.imshow(combined)
-    # plt.title('Original')
-    # plt.show()
-    # yellow_detection = pipeline.yellow_thresh(testimg)
-    # plt.imshow(yellow_detection, cmap='gray')
-    # plt.title('yellow lane')
-    # plt.show()
-
-    # white_detection = pipeline.white_thresh(testimg)
-    # plt.imshow(white_detection, cmap='gray')
-    # plt.title('white lane')
-    # plt.show()
-
-    # white_and_yellow = np.zeros_like(white_detection)
-    # white_and_yellow[(yellow_detection == 1) | (white_detection == 1)] = 1
-    # plt.imshow(white_and_yellow, cmap='gray')
-    # plt.title('white and yellow lane')
-    # plt.show()
-
-    # sobelx = pipeline.abs_sobel_thresh(testimg, sobel_kernel=9, thresh=(20,150))
-    # plt.imshow(sobelx, cmap='gray')
-    # plt.title('sobelx')
-    # plt.show()
-
-    # sobely = pipeline.abs_sobel_thresh(testimg, orient='y', sobel_kernel=9, thresh=(20,150))
-    # plt.imshow(sobely, cmap='gray')
-    # plt.title('sobely')
-    # plt.show()
-
-    # direction = pipeline.dir_threshold(testimg, sobel_kernel=13, thresh=(.7, 1.3))
-    # plt.imshow(direction, cmap='gray')
-    # plt.title('direction')
-    # plt.show()
-
-    # magnitude = pipeline.mag_thresh(testimg, sobel_kernel=9, thresh=(30, 100))
-    # plt.imshow(magnitude, cmap='gray')
-    # plt.title('magnitude')
-    # plt.show()
-
-    # basic = np.zeros_like(magnitude)
-    # basic[(white_and_yellow == 1) | ((magnitude == 1) & (direction == 1))] = 1
-    # plt.imshow(basic, cmap='gray')
-    # plt.title('Basic Implementation')
-    # plt.show()
-
-    # # for better yellow line detection
-    # rchan = pipeline.red_channel_thresh(testimg, sobel_kernel=7, thresh=(10, 100))
-    # plt.imshow(rchan, cmap='gray')
-    # plt.title('red channel')
-    # plt.show()
-
-    # combined = np.zeros_like(rchan)
-    # mask = [(direction == 1) & (rchan == 1)]
-    # combined[mask] = 1
-    # plt.imshow(combined, cmap='gray')
-    # plt.title('Yellow Detection')
-    # plt.show()
-
-    # white = np.zeros_like(rchan)
-    # mask = [(rchan == 1) & (sobelx == 1) & (magnitude == 1)]
-    # white[mask] = 1
-    # plt.imshow(white, cmap='gray')
-    # plt.title('White Detection')
-    # plt.show()
-
-
-    # final = np.zeros_like(white)
-    # mask = [(white == 1) | (combined == 1)]
-    # mask = [(another == 1) | (white == 1)]
-    # final[mask] = 1
-    # plt.imshow(final, cmap='gray')
-    # plt.title('Final')
-    # plt.show()
+        result = pipeline.run(testimg, debug=True)
+        plt.imshow(result)
+        plt.title('Result')
+        plt.show()
